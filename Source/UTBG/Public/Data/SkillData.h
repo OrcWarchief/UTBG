@@ -7,6 +7,8 @@
 #include "Data/SkillTypes.h"
 #include "SkillData.generated.h"
 
+class UTexture2D;
+class UAnimMontage;
 /**
  * 
  */
@@ -46,7 +48,10 @@ public:
     ETeamFilter TeamFilter = ETeamFilter::Enemy;
 
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Targeting")
-    int32 Range = 5; // (맨해튼/체비셰프 규약은 프로젝트 전역에서 통일)
+    int32 Range = 5;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Targeting")
+    EGridDistanceMetric RangeMetric = EGridDistanceMetric::Chebyshev;
 
     // 애니/연출
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Animation")
@@ -61,4 +66,15 @@ public:
     // 효과 묶음(데미지/버프 등)
     UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "Effects")
     TArray<FSkillEffect> Effects;
+
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VFX")
+    FSimpleVfxSpec CastVfx;
+
+    // 임팩트 VFX  타겟/위치에서 발동
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VFX")
+    FSimpleVfxSpec ImpactVfx;
+
+    // 투사체(Instant/Linear/Ballistic) - 가까우면 즉발 스냅, 시간 클램프 포함
+    UPROPERTY(EditDefaultsOnly, BlueprintReadOnly, Category = "VFX|Projectile")
+    FSimpleProjectileSpec Projectile;
 };

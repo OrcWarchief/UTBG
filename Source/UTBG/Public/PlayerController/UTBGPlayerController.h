@@ -52,8 +52,8 @@ public:
     UFUNCTION(Server, Reliable)
     void ServerTryMove(ABoard* InBoard, APawnBase* Unit, FIntPoint Target);
 
-    UFUNCTION(Server, Reliable)
-    void ServerTrySkill_Self(APawnBase* User, FName SkillId, FActionTarget Target);
+    //UFUNCTION(Server, Reliable)
+    //void ServerTrySkill_Self(APawnBase* User, FName SkillId, FActionTarget Target);
 
     UFUNCTION(Server, Reliable)
     void ServerEndTurn();
@@ -79,7 +79,7 @@ protected:
 
 private:
     TWeakObjectPtr<ABoard> Board;
-    FTimerHandle SkillApplyTimerHandle;
+    //FTimerHandle SkillApplyTimerHandle;
 
     void BindToGameState();
     FTimerHandle GSBindRetryHandle;
@@ -94,6 +94,6 @@ private:
     UFUNCTION() 
     void HandleMatchEnded(ETeam Winner, FString Reason);
 
-    UFUNCTION()
-    void ServerApplySkillEffect_Self(APawnBase* User, USkillData* Data);
+    //UFUNCTION()
+    //void ServerApplySkillEffect_Self(APawnBase* User, USkillData* Data);
 };

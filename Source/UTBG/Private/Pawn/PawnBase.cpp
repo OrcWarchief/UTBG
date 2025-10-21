@@ -2,21 +2,27 @@
 
 
 #include "Pawn/PawnBase.h"
+#include "Board/Board.h"
+#include "Tile/TileActor.h"
+#include "HUD/PawnWidget.h"
+#include "Data/SkillData.h"
+#include "GameState/UTBGGameState.h"
+#include "GamePlay/Team/TeamUtils.h"
+#include "UTBGComponents/UnitSkillsComponent.h"
+
 #include "Components/StaticMeshComponent.h"
 #include "Components/SkeletalMeshComponent.h"
 #include "Components/MeshComponent.h"
+#include "Components/WidgetComponent.h"
 #include "Animation/AnimInstance.h"
+#include "Animation/AnimMontage.h"
+#include "Engine/Engine.h"
+#include "GameFramework/Controller.h"
 #include "NiagaraFunctionLibrary.h"
 #include "NiagaraSystem.h" 
-#include "Board/Board.h"
-#include "GameFramework/Controller.h"
-#include "Engine/Engine.h"
-#include "Tile/TileActor.h"
-#include "Components/WidgetComponent.h"
-#include "HUD/PawnWidget.h"
 #include "Net/UnrealNetwork.h"
-#include "UTBGComponents/UnitSkillsComponent.h"
-#include "Animation/AnimMontage.h"
+#include "TimerManager.h"
+#include "Kismet/GameplayStatics.h"
 
 APawnBase::APawnBase()
 {
@@ -116,6 +122,22 @@ void APawnBase::UpdateHealthWidget()
 	}
 }
 
+void APawnBase::UpdateShieldWidget()
+{
+	if (!PawnWidget && PawnWidgetComp)
+	{
+		if (UUserWidget* W = PawnWidgetComp->GetUserWidgetObject())
+		{
+			PawnWidget = Cast<UPawnWidget>(W);
+		}
+	}
+	if (PawnWidget)
+	{
+		PawnWidget->SetShield(Shield, MaxShield);
+		UE_LOG(LogTemp, Verbose, TEXT("[UpdateShieldWidget] %s -> %.0f/%.0f"), *GetName(), Shield, MaxShield);
+	}
+}
+
 void APawnBase::SetOnTile(ATileActor* NewTile)
 {
 	if (NewTile == nullptr) return;
@@ -123,12 +145,29 @@ void APawnBase::SetOnTile(ATileActor* NewTile)
 	SetActorLocation(CurrentTile->GetActorLocation());
 }
 
-void APawnBase::OnRep_CurrentHP()
+void APawnBase::HandleHPChanged()
 {
-	UE_LOG(LogTemp, Warning, TEXT("[OnRep_CurrentHP] %s: %d / %d"), *GetName(), CurrentHP, MaxHP);
 	UpdateHealthWidget();
+	UE_LOG(LogTemp, Warning, TEXT("[OnRep_CurrentHP] %s: %d / %d"), *GetName(), CurrentHP, MaxHP);
+	OnHPChanged.Broadcast(this, CurrentHP);
 }
 
+void APawnBase::HandleShieldChanged()
+{
+	UpdateShieldWidget();
+	UE_LOG(LogTemp, Warning, TEXT("[OnRep_CurrentShield] %s: %f / %f"), *GetName(), Shield, MaxShield);
+	OnShieldChanged.Broadcast(this, Shield);
+}
+
+void APawnBase::OnRep_CurrentHP()
+{
+	HandleHPChanged();
+}
+
+void APawnBase::OnRep_Shield()
+{
+	HandleShieldChanged();
+}
 void APawnBase::OnRep_GridCoord(FIntPoint PrevCoord)
 {
 	if (Board && GridCoord.X >= 0 && GridCoord.Y >= 0)
@@ -141,11 +180,6 @@ void APawnBase::OnRep_GridCoord(FIntPoint PrevCoord)
 		UE_LOG(LogTemp, Verbose, TEXT("[OnRep_GridCoord] %s: Board is null or invalid coord (%d,%d). Will snap when Board arrives."),
 			*GetName(), GridCoord.X, GridCoord.Y);
 	}
-}
-
-void APawnBase::OnRep_Shield()
-{
-	// TODO: UI, FX
 }
 
 void APawnBase::OnRep_Board()
@@ -171,7 +205,183 @@ void APawnBase::SetGridCoord(FIntPoint NewCoord)
 		SetActorLocation(Board->GridToWorld(GridCoord) + PawnOffset);
 	}
 
-	ForceNetUpdate(); // 복제 틱을 앞당겨주는 효과
+	ForceNetUpdate();
+}
+
+void APawnBase::StartSkill_NotifyDriven(USkillData* InData, AActor* InTarget)
+{
+	if (!InData) return;
+
+	if (!HasAuthority())
+	{
+		Server_StartSkill_NotifyDriven(InData, InTarget);
+		return;
+	}
+
+	if (AUTBGGameState* GS = GetWorld() ? GetWorld()->GetGameState<AUTBGGameState>() : nullptr)
+	{
+		const ETeam MyTeam = UTeamUtils::GetActorTeam(this);
+		if (!GS->IsTeamTurn(MyTeam))
+		{
+			UE_LOG(LogTemp, Verbose, TEXT("[Skill] BLOCK: Not your turn"));
+			return;
+		}
+		if (GS->bResolving)
+		{
+			UE_LOG(LogTemp, Verbose, TEXT("[Skill] BLOCK: Resolving in progress"));
+			return;
+		}
+		if (!GS->HasAPForActor(this, InData->APCost))
+		{
+			UE_LOG(LogTemp, Verbose, TEXT("[Skill] BLOCK: Not enough AP"));
+			return;
+		}
+		GS->SetResolving(true);
+	}
+
+	// 서버: 이번 캐스팅 컨텍스트 저장
+	CurrentSkillData = InData;
+	CurrentSkillTarget = (InTarget != nullptr) ? InTarget : this;
+
+	bool bUsingMontage = false;
+	if (InData->CastMontage && Avatar && GetNetMode() != NM_DedicatedServer)
+	{
+		if (UAnimInstance* Anim = Avatar->GetAnimInstance())
+		{
+			bUsingMontage = true;
+		}
+	}
+
+
+	if (bUsingMontage)
+	{
+		UE_LOG(LogTemp, Warning, TEXT("[Skill] Start with MONTAGE: %s Section=%s"),
+			*GetNameSafe(InData->CastMontage), *InData->CastSection.ToString());
+		MulticastPlaySkillMontage(InData->CastMontage, InData->CastSection);
+
+		const float ImpactDelay = FMath::Max(0.f, InData->HitTimeSec);
+		GetWorldTimerManager().SetTimer(
+			ImpactFallbackHandle,
+			FTimerDelegate::CreateWeakLambda(this, [this]()
+				{
+					if (!HasAuthority()) return;
+					if (UUnitSkillsComponent* Comp = FindComponentByClass<UUnitSkillsComponent>())
+					{
+						if (CurrentSkillData)
+						{
+							AActor* T = CurrentSkillTarget.IsValid() ? CurrentSkillTarget.Get() : this;
+							Comp->PlayProjectileOrInstant(CurrentSkillData, T);
+						}
+					}
+				}),
+			ImpactDelay + 0.05f, false);
+
+		float Dur = 0.f;
+		if (InData->CastMontage)
+		{
+			const int32 SecIdx = InData->CastMontage->GetSectionIndex(InData->CastSection);
+			Dur = (SecIdx != INDEX_NONE) ? InData->CastMontage->GetSectionLength(SecIdx) : InData->CastMontage->GetPlayLength();
+		}
+		if (Dur <= 0.f) Dur = ImpactDelay + 0.2f;
+
+		GetWorldTimerManager().SetTimer(
+			CastEndFallbackHandle,
+			FTimerDelegate::CreateWeakLambda(this, [this]()
+				{
+					if (!HasAuthority()) return;
+					if (UUnitSkillsComponent* Comp = FindComponentByClass<UUnitSkillsComponent>())
+					{
+						if (CurrentSkillData) Comp->StopCastVfx(CurrentSkillData);
+					}
+					ClearSkillContext();
+				}),
+			Dur + 0.1f, false);
+
+		return;
+	}
+
+	if (UUnitSkillsComponent* Comp = Skills)
+	{
+		Comp->PlayCastVfx(InData);
+
+		const float Delay = FMath::Max(0.f, InData->HitTimeSec);
+
+		GetWorldTimerManager().SetTimer(
+			ImpactFallbackHandle,
+			FTimerDelegate::CreateWeakLambda(this, [this]()
+			{
+					if (!HasAuthority()) return;
+					if (!Skills || !CurrentSkillData) return;
+
+					AActor* TargetA = CurrentSkillTarget.IsValid() ? CurrentSkillTarget.Get() : this;
+					Skills->PlayProjectileOrInstant(CurrentSkillData, TargetA); // 내부에서 비용/효과/Resolving
+			}),
+			Delay, false);
+
+		GetWorldTimerManager().SetTimer(
+			CastEndFallbackHandle,
+			FTimerDelegate::CreateWeakLambda(this, [this]()
+				{
+					if (!HasAuthority()) return;
+					if (UUnitSkillsComponent* Comp2 = FindComponentByClass<UUnitSkillsComponent>())
+					{
+						if (CurrentSkillData) Comp2->StopCastVfx(CurrentSkillData);
+					}
+					ClearSkillContext();
+				}),
+			Delay + 0.1f, false);
+	}
+}
+
+void APawnBase::Server_StartSkill_NotifyDriven_Implementation(USkillData* InData, AActor* InTarget)
+{
+	StartSkill_NotifyDriven(InData, InTarget);
+}
+
+void APawnBase::ClearSkillContext()
+{
+	// 폴백 타이머 정리
+	GetWorldTimerManager().ClearTimer(ImpactFallbackHandle);
+	GetWorldTimerManager().ClearTimer(CastEndFallbackHandle);
+
+	CurrentSkillData = nullptr;
+	CurrentSkillTarget = nullptr;
+}
+
+void APawnBase::BP_OnCastStartNotify()
+{
+	if (!HasAuthority()) return;
+	if (UUnitSkillsComponent* Comp = FindComponentByClass<UUnitSkillsComponent>())
+	{
+		if (CurrentSkillData) { Comp->PlayCastVfx(CurrentSkillData); }
+	}
+}
+
+void APawnBase::BP_OnSkillImpactNotify()
+{
+	if (!HasAuthority()) return;
+	GetWorldTimerManager().ClearTimer(ImpactFallbackHandle);
+
+	if (UUnitSkillsComponent* Comp = FindComponentByClass<UUnitSkillsComponent>())
+	{
+		if (CurrentSkillData)
+		{
+			AActor* T = CurrentSkillTarget.IsValid() ? CurrentSkillTarget.Get() : this;
+			Comp->PlayProjectileOrInstant(CurrentSkillData, T);
+		}
+	}
+}
+
+void APawnBase::BP_OnCastEndNotify()
+{
+	if (!HasAuthority()) return;
+	GetWorldTimerManager().ClearTimer(CastEndFallbackHandle);
+
+	if (UUnitSkillsComponent* Comp = FindComponentByClass<UUnitSkillsComponent>())
+	{
+		if (CurrentSkillData) { Comp->StopCastVfx(CurrentSkillData); }
+	}
+	ClearSkillContext();
 }
 
 void APawnBase::MulticastPlaySkillMontage_Implementation(UAnimMontage* Montage, FName Section)
@@ -206,67 +416,102 @@ float APawnBase::TakeDamage(float DamageAmount, FDamageEvent const& DamageEvent,
 {
 	if (!HasAuthority()) return 0.f;
 
-	// Super 호출(플러그인/시스템이 Damage를 후킹한 경우 대비)
 	const float SuperAppliedDamage = Super::TakeDamage(DamageAmount, DamageEvent, EventInstigator, DamageCauser);
 	const float RawDamage = FMath::Max(SuperAppliedDamage, DamageAmount); // 보수적으로 더 큰 값을 채택
 	float Remaining = FMath::Max(0.f, RawDamage);
 
-	float AbsorbedByShield = 0.f;
 	if (Shield > 0.f && Remaining > 0.f)
 	{
 		const float Absorb = FMath::Min(Shield, Remaining);
 		Shield = FMath::Max(0.f, Shield - Absorb);
-		Remaining = FMath::Max(0.f, Remaining - Absorb);
-		AbsorbedByShield = Absorb;
+		Remaining -= Absorb;
 
-		OnRep_Shield(); // UI 갱신
+		HandleShieldChanged();
 		ForceNetUpdate();
 	}
 	
 	const int32 HpDamage = FMath::Max(0, FMath::RoundToInt(Remaining));
-	if (HpDamage <= 0 || IsDead())
-	{
-		UE_LOG(LogTemp, Verbose, TEXT("%s absorbed %.0f with Shield (Shield: %.0f/%.0f)"),
-			*GetName(), AbsorbedByShield, Shield, MaxShield);
-		return 0.f;
-	}
+	if (HpDamage <= 0 || IsDead()) { UE_LOG(LogTemp, Verbose, TEXT("%s with Shield (Shield: %.0f/%.0f)"), *GetName(), Shield, MaxShield); return 0.f; }
 	// HP 감소
 	const int32 NewHP = FMath::Clamp(CurrentHP - HpDamage, 0, MaxHP);
 	
-	UE_LOG(LogTemp, Verbose, TEXT("%s took %d HP damage (absorbed %.0f by Shield, HP: %d -> %d, Shield: %.0f/%.0f)"),
-		*GetName(), HpDamage, AbsorbedByShield, CurrentHP, NewHP, Shield, MaxShield);
+	UE_LOG(LogTemp, Verbose, TEXT("%s took %d HP damage (HP: %d -> %d, Shield: %.0f/%.0f)"),
+		*GetName(), HpDamage,  CurrentHP, NewHP, Shield, MaxShield);
 	// 죽음 처리
 	if (NewHP != CurrentHP)
 	{
 		CurrentHP = NewHP;
 
-		OnRep_CurrentHP();
-
+		HandleHPChanged();
 		if (IsDead())
 		{
 			HandleDeath(DamageCauser);
 		}
-		ForceNetUpdate();      // 선택: 복제 즉시 전송 유도
+		ForceNetUpdate();
 	}
 	return HpDamage;
+}
+
+void APawnBase::ApplyWidgetScale(float NewScale)
+{
+	if (GetNetMode() == NM_DedicatedServer) return;
+	if (!PawnWidgetComp) return;
+
+	NewScale = FMath::Clamp(NewScale, 0.3f, 1.25f);
+	if (FMath::IsNearlyEqual(LastAppliedWidgetScale, NewScale, 0.01f)) return;
+
+	// Screenspace
+	if (PawnWidgetComp->GetWidgetSpace() == EWidgetSpace::Screen)
+	{
+		if (!PawnWidget)
+			PawnWidget = Cast<UPawnWidget>(PawnWidgetComp->GetUserWidgetObject());
+		if (PawnWidget)
+		{
+			PawnWidget->SetRenderScale(FVector2D(NewScale, NewScale));
+		}
+	}
+	else
+	{
+		// Fallback
+		PawnWidgetComp->SetWorldScale3D(FVector(NewScale));
+	}
+
+	LastAppliedWidgetScale = NewScale;
+	UE_LOG(LogTemp, Log, TEXT("%s RenderScale=%.2f"), *GetName(), NewScale);
+}
+
+void APawnBase::ApplyWidgetLOD(int32 LOD)
+{
+	if (!PawnWidget && PawnWidgetComp)
+	{
+		PawnWidget = Cast<UPawnWidget>(PawnWidgetComp->GetUserWidgetObject());
+	}
+	if (PawnWidget)
+	{
+		PawnWidget->SetCompactModeByLOD(LOD); // 0=bar only, 1=hp text, 2=full
+	}
 }
 
 void APawnBase::SetMaxShield(float NewMax, bool bClampCurrent)
 {
 	if (!HasAuthority()) return;
 	MaxShield = FMath::Max(0.f, NewMax);
-	if (bClampCurrent)
-	{
-		Shield = FMath::Clamp(Shield, 0.f, MaxShield);
+	if (bClampCurrent) 
+	{ 
+		Shield = FMath::Clamp(Shield, 0.f, MaxShield); 
 	}
-	OnRep_Shield();
+
+	HandleShieldChanged();
+	ForceNetUpdate();
 }
 
 void APawnBase::AddShield(float Amount)
 {
 	if (!HasAuthority() || Amount <= 0.f) return;
 	Shield = FMath::Clamp(Shield + Amount, 0.f, MaxShield);
-	OnRep_Shield();
+	
+	HandleShieldChanged();
+	ForceNetUpdate();
 }
 
 void APawnBase::HandleDeath(AActor* DamageCauser)
@@ -314,6 +559,14 @@ void APawnBase::MulticastDeathEffects_Implementation()
 	}
 }
 
+void APawnBase::PlayAttackMontage(FName Section)
+{
+}
+
+void APawnBase::Server_PlayAttackMontage_Implementation(FName Section)
+{
+}
+
 void APawnBase::BeginPlay()
 {
 	Super::BeginPlay();
@@ -334,9 +587,17 @@ void APawnBase::BeginPlay()
 	{
 		UUserWidget* Widget = PawnWidgetComp->GetUserWidgetObject();
 		PawnWidget = Cast<UPawnWidget>(Widget);
+		PawnWidgetComp->SetWidgetSpace(EWidgetSpace::Screen);
+		PawnWidgetComp->SetDrawAtDesiredSize(true);
+		PawnWidgetComp->SetPivot(FVector2D(0.5f, 1.0f));
+		PawnWidgetComp->SetTwoSided(true);
 	}
 
-	UpdateHealthWidget();
+	if (GetNetMode() != NM_DedicatedServer)
+	{
+		HandleHPChanged();
+		HandleShieldChanged();
+	}
 }
 
 void APawnBase::Destroyed() {

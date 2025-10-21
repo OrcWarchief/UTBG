@@ -84,6 +84,8 @@ void AUTBGHUD::BeginPlay()
         GS->OnTeamAPChanged.AddDynamic(this, &AUTBGHUD::HandleTeamAPChanged);
         GS->OnTurnChanged.AddDynamic(this, &AUTBGHUD::HandleTurnChanged);
 
+        if (Overlay) Overlay->SetIsEnabled(!GS->bResolving);
+
         UE_LOG(LogUTBGHUD, Warning, TEXT("[HUD] Bound to GameState events: GS=%s CurrTurn=%d AP=%d MaxAP=%d"),
             *GetNameSafe(GS), (int32)GS->CurrentTurnTeam, GS->CurrentTeamAP, GS->MaxAPPerTurn);
     }
@@ -93,6 +95,16 @@ void AUTBGHUD::BeginPlay()
     }
 
     InitialRefresh();
+}
+
+void AUTBGHUD::HandleResolvingChanged(bool bResolving)
+{
+    UE_LOG(LogUTBGHUD, Warning, TEXT("[HUD] HandleResolvingChanged: %s"),
+        bResolving ? TEXT("LOCK") : TEXT("UNLOCK"));
+    if (Overlay)
+    {
+        Overlay->SetIsEnabled(!bResolving);
+    }
 }
 
 ETeam AUTBGHUD::GetLocalTeam() const
@@ -194,20 +206,63 @@ void AUTBGHUD::HandleSkillChosen(APawnBase* User, FName SkillId)
     UE_LOG(LogUTBGHUD, Warning, TEXT("[HUD] HandleSkillChosen: User=%s SkillId=%s"),
         *GetNameSafe(User), *SkillId.ToString());
 
-    APlayerController* PC = GetOwningPlayerController();
-    if (!PC) { UE_LOG(LogUTBGHUD, Error, TEXT("[HUD]   -> No owning PC")); return; }
+    if (!User) { UE_LOG(LogUTBGHUD, Error, TEXT("[HUD]   -> User null")); return; }
 
-    if (AUTBGPlayerController* MyPC = Cast<AUTBGPlayerController>(PC))
+    UUnitSkillsComponent* Skills = User->FindComponentByClass<UUnitSkillsComponent>();
+    if (!Skills) { UE_LOG(LogUTBGHUD, Error, TEXT("[HUD]   -> User has no UnitSkillsComponent")); return; }
+
+    USkillData* Data = Skills->FindSkillById(SkillId);
+    if (!Data) { UE_LOG(LogUTBGHUD, Error, TEXT("[HUD]   -> Skill not found: %s"), *SkillId.ToString()); return; }
+
+    if (AUTBGGameState* GS = GetWorld()->GetGameState<AUTBGGameState>())
     {
-        FActionTarget Target; // Self 타깃 예시. 타깃팅 모드가 있다면 HUD에서 채워 넣으세요.
-        UE_LOG(LogUTBGHUD, Warning, TEXT("[HUD]   -> RPC ServerTrySkill_Self(User=%s, SkillId=%s)"),
-            *GetNameSafe(User), *SkillId.ToString());
-        MyPC->ServerTrySkill_Self(User, SkillId, Target);
+        if (!GS->IsActorTurn(User))
+        {
+            UE_LOG(LogUTBGHUD, Verbose, TEXT("[HUD]   -> BLOCK: Not your turn"));
+            return;
+        }
+        if (GS->bResolving)
+        {
+            UE_LOG(LogUTBGHUD, Verbose, TEXT("[HUD]   -> BLOCK: Resolving in progress"));
+            return;
+        }
+        if (!GS->HasAPForActor(User, Data->APCost))
+        {
+            UE_LOG(LogUTBGHUD, Verbose, TEXT("[HUD]   -> BLOCK: Not enough AP"));
+            return;
+        }
     }
-    else
+
+    FText Reason;
+    if (!Skills->CanUseByCooldownOnly(Data, Reason))
     {
-        UE_LOG(LogUTBGHUD, Error, TEXT("[HUD]   -> Owning PC cast to AUTBGPlayerController failed"));
+        UE_LOG(LogUTBGHUD, Verbose, TEXT("[HUD]   -> BLOCK: %s"), *Reason.ToString());
+        return;
     }
+
+    // 타깃(임시: Self 우선)
+    AActor* TargetActor = nullptr;
+    switch (Data->TargetMode)
+    {
+    case ESkillTargetMode::Self: TargetActor = User; break;
+    default:                     TargetActor = User; break; // 추후 타깃팅 UI 붙이면 교체
+    }
+
+    // 사거리 빠른 가드
+    if (TargetActor)
+    {
+        FText RangeReason;
+        if (!Skills->CanUseByRangeOnly(Data, TargetActor, RangeReason))
+        {
+            UE_LOG(LogUTBGHUD, Verbose, TEXT("[HUD]   -> BLOCK: %s"), *RangeReason.ToString());
+            return;
+        }
+    }
+
+    UE_LOG(LogUTBGHUD, Warning, TEXT("[HUD]   -> StartSkill_NotifyDriven(Data=%s, Target=%s)"),
+        *GetNameSafe(Data), *GetNameSafe(TargetActor));
+
+    User->StartSkill_NotifyDriven(Data, TargetActor);
 }
 
 void AUTBGHUD::OnEndTurnClicked()

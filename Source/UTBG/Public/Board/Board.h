@@ -70,9 +70,9 @@ protected:
 
 	// 그리드 크기, 타일 크기, 원점, 타일 클래스
 	UPROPERTY(EditAnywhere, Category = "Config")
-	int32 Rows = 3;
+	int32 Rows = 8;
 	UPROPERTY(EditAnywhere, Category = "Config")
-	int32 Cols = 3;
+	int32 Cols = 8;
 	UPROPERTY(EditAnywhere, Category = "Config", meta = (ClampMin = 1.0))
 	float TileSize = 100.f;
 	UPROPERTY(EditAnywhere, Category = "Config")

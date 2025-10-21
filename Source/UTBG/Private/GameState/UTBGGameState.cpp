@@ -5,6 +5,9 @@
 #include "Net/UnrealNetwork.h"
 #include "PlayerState/UTBGPlayerState.h"
 #include "GamePlay/Team/TeamUtils.h"
+#include "Pawn/PawnBase.h"
+#include "UTBGComponents/UnitSkillsComponent.h"
+#include "EngineUtils.h"
 
 DEFINE_LOG_CATEGORY_STATIC(LogUTBGGameState, Log, All);
 
@@ -111,6 +114,8 @@ void AUTBGGameState::EndTurn()
 
     UE_LOG(LogUTBGGameState, Log, TEXT("[TURN] %d -> %d | AP=%d | TurnIndex=%d"),
         (int32)Prev, (int32)CurrentTurnTeam, CurrentTeamAP, TurnIndex);
+
+    ApplyTurnStartEffects();
 }
 
 void AUTBGGameState::SetResolving(bool bNew)
@@ -136,7 +141,27 @@ void AUTBGGameState::OnRep_CurrentTeamAP()
 void AUTBGGameState::OnRep_Resolving()
 {
     UE_LOG(LogUTBGGameState, Log, TEXT("[OnRep_Resolving] %s"), bResolving ? TEXT("TRUE") : TEXT("FALSE"));
-    // TODO: HUD에 잠금/해제 전달 (IsEnabled 토글)
+    OnResolvingChanged.Broadcast(bResolving);
+}
+
+void AUTBGGameState::ApplyTurnStartEffects()
+{
+    if (!HasAuthority()) return;
+
+    int32 Count = 0;
+    for (TActorIterator<APawnBase> It(GetWorld()); It; ++It)
+    {
+        APawnBase* P = *It;
+        if (!IsValid(P)) continue;
+        if (UTeamUtils::GetActorTeam(P) != CurrentTurnTeam) continue;
+
+        if (UUnitSkillsComponent* S = P->FindComponentByClass<UUnitSkillsComponent>())
+        {
+            S->OnTurnStarted(); // 쿨다운 -1 (rep 내부 브로드캐스트)
+            ++Count;
+        }
+    }
+    UE_LOG(LogUTBGGameState, Log, TEXT("[TURN] ApplyTurnStartEffects: Skills OnTurnStarted -> %d units"), Count);
 }
 
 void AUTBGGameState::ServerSetMatchResult(ETeam Winner, const FString& Reason)

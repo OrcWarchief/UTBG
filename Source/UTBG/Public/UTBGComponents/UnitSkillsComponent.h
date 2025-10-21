@@ -4,9 +4,11 @@
 
 #include "CoreMinimal.h"
 #include "Components/ActorComponent.h"
+#include "Data/SkillTypes.h"
 #include "UnitSkillsComponent.generated.h"
 
 class USkillData;
+class UNiagaraComponent;
 
 DECLARE_DYNAMIC_MULTICAST_DELEGATE(FOnCooldownsUpdated);
 
@@ -72,6 +74,71 @@ public:
     UFUNCTION(BlueprintPure, Category = "Skills")
     void GetSkillsCopy(TArray<USkillData*>& OutSkills) const;
 
+    // --------------------- (옵션) Range 전용 헬퍼 ---------------------
+    UFUNCTION(BlueprintCallable, Category = "Skills|Rules")
+    bool CanUseByRangeOnly(const USkillData* Data, const AActor* Target, FText& OutReason) const;
+
+    UFUNCTION(BlueprintCallable, Category = "Skills|Rules")
+    bool CanReachLocation(const USkillData* Data, const FVector& TargetLocation, FText& OutReason) const;
+
+    UFUNCTION(BlueprintPure, Category = "Skills|Rules")
+    float GetRangeInUU(const USkillData* Data) const;
+
+    // --------------------- VFX / Projectile API ---------------------
+    // 캐스팅 시작/종료, 임팩트(원샷) 재생
+    UFUNCTION(BlueprintCallable, Category = "Skills|VFX")
+    void PlayCastVfx(const USkillData* Data);
+
+    UFUNCTION(BlueprintCallable, Category = "Skills|VFX")
+    void StopCastVfx(const USkillData* Data);
+
+    UFUNCTION(BlueprintCallable, Category = "Skills|VFX")
+    void PlayImpactVfx(const USkillData* Data, AActor* Target);
+
+    UFUNCTION(BlueprintCallable, Category = "Skills|Internal")
+    void ApplyEffectsAndCosts_Server(const USkillData* Data, AActor* Target);
+
+    // 즉발/직사/곡사 통합. 내부에서 거리/속도→이동시간 계산, 근거리 스냅 처리
+    UFUNCTION(BlueprintCallable, Category = "Skills|VFX")
+    void PlayProjectileOrInstant(const USkillData* Data, AActor* Target);
+
+protected:
+    // --------------------- VFX RPC ---------------------
+    UFUNCTION(Server, Reliable)
+    void Server_PlaySimpleVfx(FName SkillId, ESimpleVfxSlot Slot, AActor* Target);
+
+    UFUNCTION(NetMulticast, Unreliable)
+    void Multicast_PlaySimpleVfx(FName SkillId, ESimpleVfxSlot Slot, AActor* Source, AActor* Target);
+
+    UFUNCTION(Server, Reliable)
+    void Server_StopSimpleVfx(FName SkillId, ESimpleVfxSlot Slot);
+
+    // 루프 누수 방지를 위해 Reliable
+    UFUNCTION(NetMulticast, Reliable)
+    void Multicast_StopSimpleVfx(FName SkillId, ESimpleVfxSlot Slot);
+
+    UFUNCTION(NetMulticast, Unreliable)
+    void Multicast_StartProjectile(FName SkillId, FVector_NetQuantize Start, FVector_NetQuantize End, float TravelTime);
+
 private:
+    // --------------------- 로컬 재생 구현 ---------------------
+    void PlaySimpleVfx_Local(const USkillData* Data, ESimpleVfxSlot Slot, AActor* Source, AActor* Target);
+    void StopSimpleVfx_Local(const USkillData* Data, ESimpleVfxSlot Slot);
+    void StartProjectile_Local(const USkillData* Data, const FVector& Start, const FVector& End, float TravelTime);
+
+    static FName MakeVfxKey(FName SkillId, ESimpleVfxSlot Slot);
+    static const FSimpleVfxSpec& GetSpec(const USkillData* Data, ESimpleVfxSlot Slot);
+
+    static int32 ComputeTilesDistance2D(const FVector& A, const FVector& B, EGridDistanceMetric Metric, float TileSizeUU = 100.f);
+
+    // 루프 VFX 관리
+    UPROPERTY(Transient)
+    TMap<FName, TWeakObjectPtr<UNiagaraComponent>> ActiveLoopVfx;
+
+    UPROPERTY(Transient)
+    TMap<TWeakObjectPtr<UNiagaraComponent>, FTimerHandle> ProjectileMoveTimers;
+
     mutable TArray<USkillData*> SkillsRawCache;
+
+    FORCEINLINE bool HasServerAuthority() const { const AActor* O = GetOwner(); return O && O->HasAuthority(); }
 };

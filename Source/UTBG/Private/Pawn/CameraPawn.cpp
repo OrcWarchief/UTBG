@@ -2,15 +2,22 @@
 
 
 #include "Pawn/CameraPawn.h"
+#include "Pawn/PawnBase.h"
+#include "Board/Board.h"
 #include "Camera/CameraComponent.h"
 #include "GameFramework/SpringArmComponent.h"
 #include "GameFramework/FloatingPawnMovement.h"
 #include "Kismet/GameplayStatics.h"
-#include "Board/Board.h"
+#include "EngineUtils.h"
 
-#include "EnhancedInputSubsystems.h"
 #include "EnhancedInputComponent.h"
 #include "InputActionValue.h"
+
+static FORCEINLINE FVector GetCamLoc(UWorld* World)
+{
+    if (APlayerCameraManager* Cam = UGameplayStatics::GetPlayerCameraManager(World, 0)) return Cam->GetCameraLocation();
+    return FVector::ZeroVector;
+}
 
 ACameraPawn::ACameraPawn()
 {
@@ -28,13 +35,15 @@ ACameraPawn::ACameraPawn()
 
 
     Movement = CreateDefaultSubobject<UFloatingPawnMovement>(TEXT("Movement"));
-    Movement->MaxSpeed = 10000.f; // 내부적으로 사용, 우리는 AddActorOffset로 이동
+    Movement->MaxSpeed = 10000.f; // 내부적으로 사용, AddActorOffset로 이동
 }
 
 void ACameraPawn::BeginPlay()
 {
     Super::BeginPlay();
     Board = Cast<ABoard>(UGameplayStatics::GetActorOfClass(GetWorld(), ABoard::StaticClass()));
+    LastArmLengthNotified = SpringArm->TargetArmLength;
+    UpdateWidgetScaleForAllPawns();
 }
 
 void ACameraPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponent)
@@ -51,6 +60,51 @@ void ACameraPawn::SetupPlayerInputComponent(UInputComponent* PlayerInputComponen
     }
 }
 
+float ACameraPawn::ComputeTargetScale(float Arm) const
+{
+    // Zoom in -> bigger scale
+    return FMath::GetMappedRangeValueClamped(
+        FVector2D(MinArm, MaxArm),
+        FVector2D(MaxWidgetScale, MinWidgetScale),
+        Arm);
+}
+
+int32 ACameraPawn::ComputeLOD(float Arm) const
+{
+    // Farther arm => smaller detail
+    if (Arm > LOD0Arm) return 0;     // far: bars only
+    if (Arm > LOD1Arm) return 1;     // mid: + HP text
+    return 2;                         // near: full (shield row)
+}
+
+void ACameraPawn::UpdateWidgetScaleForAllPawns()
+{
+    if (!IsLocallyControlled()) return;
+
+    const float Arm = SpringArm->TargetArmLength;
+    const float Scale = ComputeTargetScale(Arm);
+    const int32 LOD = ComputeLOD(Arm);
+    const bool  bNotify =
+        (LastArmLengthNotified < 0.f) ||
+        (FMath::Abs(Arm - LastArmLengthNotified) > NotifyDeltaThreshold) ||
+        (LOD != LastLODNotified);
+
+    if (!bNotify) return;
+
+    const FVector CamLoc = GetCamLoc(GetWorld());
+
+    for (TActorIterator<APawnBase> It(GetWorld()); It; ++It)
+    {
+        It->ApplyWidgetScale(Scale);
+        It->ApplyWidgetLOD(LOD);
+    }
+
+    LastArmLengthNotified = Arm;
+    LastLODNotified = LOD;
+
+    UE_LOG(LogTemp, Log, TEXT("[CameraPawn] Arm=%.0f  Scale=%.2f  LOD=%d"), Arm, Scale, LOD);
+}
+
 void ACameraPawn::Move(const FInputActionValue& Value)
 {
     const FVector2D v = Value.Get<FVector2D>();
@@ -65,13 +119,17 @@ void ACameraPawn::Move(const FInputActionValue& Value)
     FVector delta = (Fwd * v.Y + Right * v.X) * MoveSpeed * dt;
     AddActorWorldOffset(delta, true);
     ClampToBoard();
+
+    UpdateWidgetScaleForAllPawns();
 }
 
 void ACameraPawn::Zoom(const FInputActionValue& Value)
 {
-    const float wheel = Value.Get<float>();  // +위, -아래 (에디터 설정에 따라 반대일 수 있음)
+    const float wheel = Value.Get<float>();
     SpringArm->TargetArmLength = FMath::Clamp(SpringArm->TargetArmLength - wheel * ZoomSpeed, MinArm, MaxArm);
     ClampToBoard();
+
+    UpdateWidgetScaleForAllPawns();
 }
 
 void ACameraPawn::Pan(const FInputActionValue& Value)
@@ -88,6 +146,8 @@ void ACameraPawn::Pan(const FInputActionValue& Value)
     FVector delta = (-Right * d.X + -Fwd * d.Y) * PanSpeed;
     AddActorWorldOffset(delta, true);
     ClampToBoard();
+
+    UpdateWidgetScaleForAllPawns();
 }
 
 void ACameraPawn::ClampToBoard()

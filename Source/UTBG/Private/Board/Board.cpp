@@ -366,11 +366,8 @@ void ABoard::HandleTileClicked(ATileActor* Tile)
 	{
 	case EBoardState::EBS_Idle: 			// 1) 아무 것도 선택 안 된 상태 -> 아군 유닛이면 선택
 	{
-		if (bDebugBoardLogs) UE_LOG(LogBoard, Warning, TEXT("State=Idle: ClickedUnit=%s"), *GetNameSafe(ClickedUnit));
-
 		if (IsValid(ClickedUnit) && PC && UTeamUtils::AreSameTeam(ClickedUnit, PC))
 		{
-			if (bDebugBoardLogs) UE_LOG(LogBoard, Warning, TEXT(" -> EnterUnitSelected (ally)"));
 			EnterUnitSelected(ClickedUnit);
 		}
 		break;

@@ -21,15 +21,15 @@
 #include "Engine/Engine.h"
 #include "Logging/LogMacros.h"
 #include "Engine/World.h"
-#include "TimerManager.h"
+//#include "TimerManager.h"
 #include "Blueprint/UserWidget.h" 
 
 // 로그 카테고리
 DEFINE_LOG_CATEGORY_STATIC(LogUTBGPC, Log, All);
 
 // 작은 헬퍼들
-static FString Obj(const UObject* O) { return FString::Printf(TEXT("%s[%p]"), *GetNameSafe(O), O); }
-static FString Pt(const FIntPoint& P) { return FString::Printf(TEXT("(%d,%d)"), P.X, P.Y); }
+static FString Obj1(const UObject* O) { return FString::Printf(TEXT("%s[%p]"), *GetNameSafe(O), O); }
+static FString Pt1(const FIntPoint& P) { return FString::Printf(TEXT("(%d,%d)"), P.X, P.Y); }
 
 static const TCHAR* TeamToStr(ETeam T)
 {
@@ -60,22 +60,22 @@ ETeam AUTBGPlayerController::GetTeam() const
 	if (const AUTBGPlayerState* PS = GetPlayerState<AUTBGPlayerState>())
 	{
 		const ETeam T = PS->GetTeam();
-		UE_LOG(LogUTBGPC, Verbose, TEXT("[GetTeam] PC=%s -> %s"), *Obj(this), TeamToStr(T));
+		UE_LOG(LogUTBGPC, Verbose, TEXT("[GetTeam] PC=%s -> %s"), *Obj1(this), TeamToStr(T));
 		return T;
 	}
-	UE_LOG(LogUTBGPC, Verbose, TEXT("[GetTeam] PC=%s -> NoTeam(PS null)"), *Obj(this));
+	UE_LOG(LogUTBGPC, Verbose, TEXT("[GetTeam] PC=%s -> NoTeam(PS null)"), *Obj1(this));
 	return ETeam::ET_NoTeam;
 }
 
 void AUTBGPlayerController::ServerSetTeam_Implementation(ETeam NewTeam)
 {
 	UE_LOG(LogUTBGPC, Warning, TEXT("[RPC][ServerSetTeam] PC=%s NewTeam=%s HasAuth=%d"),
-		*Obj(this), TeamToStr(NewTeam), HasAuthority());
+		*Obj1(this), TeamToStr(NewTeam), HasAuthority());
 
 	if (AUTBGPlayerState* PS = GetPlayerState<AUTBGPlayerState>())
 	{
 		PS->SetTeam(NewTeam); // 서버 권위
-		UE_LOG(LogUTBGPC, Warning, TEXT("  -> PS=%s Team set to %s"), *Obj(PS), TeamToStr(PS->GetTeam()));
+		UE_LOG(LogUTBGPC, Warning, TEXT("  -> PS=%s Team set to %s"), *Obj1(PS), TeamToStr(PS->GetTeam()));
 	}
 	else
 	{
@@ -91,7 +91,7 @@ void AUTBGPlayerController::ServerTryAttack_Implementation(ABoard* InBoard, APaw
 	}
 
 	UE_LOG(LogUTBGPC, Warning, TEXT("[RPC][Server_TryAttack] PC=%s Board=%s Attacker=%s Target=%s HasAuth=%d"),
-		*Obj(this), *Obj(InBoard), *Obj(Attacker), *Obj(Target), HasAuthority());
+		*Obj1(this), *Obj1(InBoard), *Obj1(Attacker), *Obj1(Target), HasAuthority());
 
 	if (!InBoard || !Attacker || !Target)
 	{
@@ -121,9 +121,9 @@ void AUTBGPlayerController::ServerTryMove_Implementation(ABoard* InBoard, APawnB
 	}
 
 	UE_LOG(LogUTBGPC, Warning, TEXT("[RPC][Server_TryMove] PC=%s Board=%s Unit=%s From=%s -> To=%s HasAuth=%d"),
-		*Obj(this), *Obj(InBoard), *Obj(Unit),
-		Unit ? *Pt(Unit->GetGridCoord()) : TEXT("(null)"),
-		*Pt(Target), HasAuthority());
+		*Obj1(this), *Obj1(InBoard), *Obj1(Unit),
+		Unit ? *Pt1(Unit->GetGridCoord()) : TEXT("(null)"),
+		*Pt1(Target), HasAuthority());
 
 	if (!InBoard || !Unit)
 	{
@@ -162,88 +162,88 @@ void AUTBGPlayerController::ServerEndTurn_Implementation()
 	}
 }
 
-void AUTBGPlayerController::ServerTrySkill_Self_Implementation(APawnBase* User, FName SkillId, FActionTarget Target)
-{
-	if (const AUTBGGameState* GSx = GetWorld() ? GetWorld()->GetGameState<AUTBGGameState>() : nullptr)
-	{
-		if (GSx->IsGameOver()) { UE_LOG(LogUTBGPC, Verbose, TEXT("[RPC][SkillSelf] BLOCK: GameOver")); return; }
-	}
-
-	UE_LOG(LogUTBGPC, Warning, TEXT("[RPC][ServerTryUseSkillSelf] PC=%s User=%s SkillId=%s HasAuth=%d"),
-		*Obj(this), *Obj(User), *SkillId.ToString(), HasAuthority());
-
-	// 0) 기본 방어
-	if (!IsValid(User)) return;
-
-	AUTBGGameState* GS = GetWorld() ? GetWorld()->GetGameState<AUTBGGameState>() : nullptr;
-	if (!GS)
-	{
-		UE_LOG(LogUTBGPC, Warning, TEXT("  -> FAIL: GameState null"));
-		return;
-	}
-
-	const ETeam PcTeam = UTeamUtils::GetActorTeam(this);
-	const ETeam UnitTeam = UTeamUtils::GetActorTeam(User);
-
-	const bool bTurnOK = GS->IsTeamTurn(PcTeam); 
-	const bool bTeamOK = (UnitTeam == PcTeam) && (PcTeam != ETeam::ET_NoTeam);
-
-	UE_LOG(LogUTBGPC, Warning, TEXT("  -> Guards: TurnOK=%d TeamOK=%d (You=%d Unit=%d) Resolving=%d"),
-		bTurnOK ? 1 : 0, bTeamOK ? 1 : 0, (int32)PcTeam, (int32)UnitTeam, GS->bResolving ? 1 : 0);
-
-	if (!bTurnOK || !bTeamOK || GS->bResolving) return;
-
-	UUnitSkillsComponent* Skills = User->FindComponentByClass<UUnitSkillsComponent>();
-	if (!Skills)
-	{
-		UE_LOG(LogUTBGPC, Warning, TEXT("  -> FAIL: User has no UnitSkillsComponent"));
-		return;
-	}
-
-	USkillData* Data = Skills->FindSkillById(SkillId);
-	if (!Data)
-	{
-		UE_LOG(LogUTBGPC, Warning, TEXT("  -> FAIL: Skill not found: %s"), *SkillId.ToString());
-		return;
-	}
-
-	if (Data->TargetMode != ESkillTargetMode::Self)
-	{
-		UE_LOG(LogUTBGPC, Warning, TEXT("  -> FAIL: Skill is not Self-target mode"));
-		return;
-	}
-
-	FText Reason;
-	if (!Skills->CanUseByCooldownOnly(Data, Reason))
-	{
-		UE_LOG(LogUTBGPC, Verbose, TEXT("  -> BLOCK: Cooldown: %s"), *Reason.ToString());
-		return;
-	}
-
-	GS->SetResolving(true);
-	Skills->StartCooldown(Data);
-
-	if (Data->CastMontage)
-	{
-		User->MulticastPlaySkillMontage(Data->CastMontage, Data->CastSection);
-	}
-
-	const float DelaySec = FMath::Max(0.f, Data->HitTimeSec);
-
-	FTimerDelegate D = FTimerDelegate::CreateUObject(
-		this, &AUTBGPlayerController::ServerApplySkillEffect_Self, User, Data
-	);
-	GetWorldTimerManager().SetTimer(SkillApplyTimerHandle, D, DelaySec, false);
-
-	UE_LOG(LogUTBGPC, Verbose, TEXT("  -> Scheduled Self Hit in %.2fs"), DelaySec);
-}
+//void AUTBGPlayerController::ServerTrySkill_Self_Implementation(APawnBase* User, FName SkillId, FActionTarget Target)
+//{
+//	if (const AUTBGGameState* GSx = GetWorld() ? GetWorld()->GetGameState<AUTBGGameState>() : nullptr)
+//	{
+//		if (GSx->IsGameOver()) { UE_LOG(LogUTBGPC, Verbose, TEXT("[RPC][SkillSelf] BLOCK: GameOver")); return; }
+//	}
+//
+//	UE_LOG(LogUTBGPC, Warning, TEXT("[RPC][ServerTryUseSkillSelf] PC=%s User=%s SkillId=%s HasAuth=%d"),
+//		*Obj1(this), *Obj1(User), *SkillId.ToString(), HasAuthority());
+//
+//	// 0) 기본 방어
+//	if (!IsValid(User)) return;
+//
+//	AUTBGGameState* GS = GetWorld() ? GetWorld()->GetGameState<AUTBGGameState>() : nullptr;
+//	if (!GS)
+//	{
+//		UE_LOG(LogUTBGPC, Warning, TEXT("  -> FAIL: GameState null"));
+//		return;
+//	}
+//
+//	const ETeam PcTeam = UTeamUtils::GetActorTeam(this);
+//	const ETeam UnitTeam = UTeamUtils::GetActorTeam(User);
+//
+//	const bool bTurnOK = GS->IsTeamTurn(PcTeam); 
+//	const bool bTeamOK = (UnitTeam == PcTeam) && (PcTeam != ETeam::ET_NoTeam);
+//
+//	UE_LOG(LogUTBGPC, Warning, TEXT("  -> Guards: TurnOK=%d TeamOK=%d (You=%d Unit=%d) Resolving=%d"),
+//		bTurnOK ? 1 : 0, bTeamOK ? 1 : 0, (int32)PcTeam, (int32)UnitTeam, GS->bResolving ? 1 : 0);
+//
+//	if (!bTurnOK || !bTeamOK || GS->bResolving) return;
+//
+//	UUnitSkillsComponent* Skills = User->FindComponentByClass<UUnitSkillsComponent>();
+//	if (!Skills)
+//	{
+//		UE_LOG(LogUTBGPC, Warning, TEXT("  -> FAIL: User has no UnitSkillsComponent"));
+//		return;
+//	}
+//
+//	USkillData* Data = Skills->FindSkillById(SkillId);
+//	if (!Data)
+//	{
+//		UE_LOG(LogUTBGPC, Warning, TEXT("  -> FAIL: Skill not found: %s"), *SkillId.ToString());
+//		return;
+//	}
+//
+//	if (Data->TargetMode != ESkillTargetMode::Self)
+//	{
+//		UE_LOG(LogUTBGPC, Warning, TEXT("  -> FAIL: Skill is not Self-target mode"));
+//		return;
+//	}
+//
+//	FText Reason;
+//	if (!Skills->CanUseByCooldownOnly(Data, Reason))
+//	{
+//		UE_LOG(LogUTBGPC, Verbose, TEXT("  -> BLOCK: Cooldown: %s"), *Reason.ToString());
+//		return;
+//	}
+//
+//	GS->SetResolving(true);
+//	Skills->StartCooldown(Data);
+//
+//	if (Data->CastMontage)
+//	{
+//		User->MulticastPlaySkillMontage(Data->CastMontage, Data->CastSection);
+//	}
+//
+//	const float DelaySec = FMath::Max(0.f, Data->HitTimeSec);
+//
+//	FTimerDelegate D = FTimerDelegate::CreateUObject(
+//		this, &AUTBGPlayerController::ServerApplySkillEffect_Self, User, Data
+//	);
+//	GetWorldTimerManager().SetTimer(SkillApplyTimerHandle, D, DelaySec, false);
+//
+//	UE_LOG(LogUTBGPC, Verbose, TEXT("  -> Scheduled Self Hit in %.2fs"), DelaySec);
+//}
 
 void AUTBGPlayerController::BeginPlay()
 {
 	Super::BeginPlay();
 
 	UE_LOG(LogUTBGPC, Warning, TEXT("[BeginPlay] PC=%s NetMode=%s HasAuth=%d LocalPlayer=%s"),
-		*Obj(this), NetModeToStr(GetWorld()), HasAuthority(), *Obj(GetLocalPlayer()));
+		*Obj1(this), NetModeToStr(GetWorld()), HasAuthority(), *Obj1(GetLocalPlayer()));
 
 	/* Enhanced Input Subsystem에 Mapping Context 추가 */
 	if (UEnhancedInputLocalPlayerSubsystem* SubSys =
@@ -258,7 +258,7 @@ void AUTBGPlayerController::BeginPlay()
 
 	// 보드 캐시
 	Board = Cast<ABoard>(UGameplayStatics::GetActorOfClass(GetWorld(), ABoard::StaticClass()));
-	UE_LOG(LogUTBGPC, Warning, TEXT("  -> Cached Board = %s"), *Obj(Board.Get()));
+	UE_LOG(LogUTBGPC, Warning, TEXT("  -> Cached Board = %s"), *Obj1(Board.Get()));
 
 	// 마우스
 	bShowMouseCursor = true;
@@ -302,13 +302,13 @@ void AUTBGPlayerController::OnPossess(APawn* InPawn)
 {
 	Super::OnPossess(InPawn);
 	UE_LOG(LogUTBGPC, Warning, TEXT("[OnPossess] PC=%s Pawn=%s Team=%s"),
-		*Obj(this), *Obj(InPawn), TeamToStr(GetTeam()));
+		*Obj1(this), *Obj1(InPawn), TeamToStr(GetTeam()));
 }
 
 void AUTBGPlayerController::OnUnPossess()
 {
 	UE_LOG(LogUTBGPC, Warning, TEXT("[OnUnPossess] PC=%s Pawn=%s"),
-		*Obj(this), *Obj(GetPawn()));
+		*Obj1(this), *Obj1(GetPawn()));
 	Super::OnUnPossess();
 }
 
@@ -343,7 +343,7 @@ void AUTBGPlayerController::OnLeftClick(const FInputActionValue&)
 		GetHitResultUnderCursorByChannel(UEngineTypes::ConvertToTraceType(ECC_Visibility), false, Hit);
 
 	UE_LOG(LogUTBGPC, Warning, TEXT("[Click] PC=%s bHit=%d Actor=%s Loc=%s"),
-		*Obj(this), bHit, *Obj(Hit.GetActor()),
+		*Obj1(this), bHit, *Obj1(Hit.GetActor()),
 		*Hit.ImpactPoint.ToString());
 
 	if (!bHit) return;
@@ -352,7 +352,7 @@ void AUTBGPlayerController::OnLeftClick(const FInputActionValue&)
 	{
 		const FIntPoint Grid = Tile->GetGridCoord();
 		UE_LOG(LogUTBGPC, Warning, TEXT("  -> Tile=%s Grid=%s Board=%s"),
-			*Obj(Tile), *Pt(Grid), *Obj(Board.Get()));
+			*Obj1(Tile), *Pt1(Grid), *Obj1(Board.Get()));
 
 		if (Board.IsValid() && IsValid(Tile))
 		{
@@ -371,40 +371,40 @@ void AUTBGPlayerController::OnLeftClick(const FInputActionValue&)
 	}
 }
 
-void AUTBGPlayerController::ServerApplySkillEffect_Self(APawnBase* User, USkillData* Data)
-{
-	AUTBGGameState* GS = GetWorld() ? GetWorld()->GetGameState<AUTBGGameState>() : nullptr;
-
-	UE_LOG(LogUTBGPC, Warning, TEXT("[SelfHit] APPLY: User=%s Skill=%s Shield=%.0f/%.0f"),
-		*Obj(User), *Obj(Data), User ? User->Shield : -1.f, User ? User->MaxShield : -1.f);
-
-	if (!IsValid(User) || !IsValid(Data))
-	{
-		if (GS) GS->SetResolving(false);
-		UE_LOG(LogUTBGPC, Warning, TEXT("[SelfHit] FAIL: Invalid User/Data, unlocking resolving"));
-		return;
-	}
-
-	const float Missing = FMath::Max(0.f, User->MaxShield - User->Shield);
-	if (Missing > 0.f)
-	{
-		User->AddShield(Missing);
-		UE_LOG(LogUTBGPC, Warning, TEXT("[SelfHit] Refilled Shield by %.0f -> (%.0f/%.0f)"),
-			Missing, User->Shield, User->MaxShield);
-	}
-	else
-	{
-		UE_LOG(LogUTBGPC, Warning, TEXT("[SelfHit] Shield already full (%.0f/%.0f)"),
-			User->Shield, User->MaxShield);
-	}
-
-	if (GS) GS->SetResolving(false);
-	if (Data->bEndsTurn && GS && GS->HasAuthority())
-	{
-		GS->EndTurn();
-	}
-	GetWorldTimerManager().ClearTimer(SkillApplyTimerHandle);
-}
+//void AUTBGPlayerController::ServerApplySkillEffect_Self(APawnBase* User, USkillData* Data)
+//{
+//	AUTBGGameState* GS = GetWorld() ? GetWorld()->GetGameState<AUTBGGameState>() : nullptr;
+//
+//	UE_LOG(LogUTBGPC, Warning, TEXT("[SelfHit] APPLY: User=%s Skill=%s Shield=%.0f/%.0f"),
+//		*Obj1(User), *Obj1(Data), User ? User->Shield : -1.f, User ? User->MaxShield : -1.f);
+//
+//	if (!IsValid(User) || !IsValid(Data))
+//	{
+//		if (GS) GS->SetResolving(false);
+//		UE_LOG(LogUTBGPC, Warning, TEXT("[SelfHit] FAIL: Invalid User/Data, unlocking resolving"));
+//		return;
+//	}
+//
+//	const float Missing = FMath::Max(0.f, User->MaxShield - User->Shield);
+//	if (Missing > 0.f)
+//	{
+//		User->AddShield(Missing);
+//		UE_LOG(LogUTBGPC, Warning, TEXT("[SelfHit] Refilled Shield by %.0f -> (%.0f/%.0f)"),
+//			Missing, User->Shield, User->MaxShield);
+//	}
+//	else
+//	{
+//		UE_LOG(LogUTBGPC, Warning, TEXT("[SelfHit] Shield already full (%.0f/%.0f)"),
+//			User->Shield, User->MaxShield);
+//	}
+//
+//	if (GS) GS->SetResolving(false);
+//	if (Data->bEndsTurn && GS && GS->HasAuthority())
+//	{
+//		GS->EndTurn();
+//	}
+//	GetWorldTimerManager().ClearTimer(SkillApplyTimerHandle);
+//}
 
 void AUTBGPlayerController::HandleMatchEnded(ETeam Winner, FString Reason)
 {

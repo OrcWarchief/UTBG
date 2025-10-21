@@ -1,0 +1,24 @@
+{
+	"FileVersion": 3,
+	"Version": 1,
+	"VersionName": "1.0",
+	"FriendlyName": "AICore",
+	"Description": "Deterministic turn-based AI core",
+	"Category": "AI",
+	"CreatedBy": "RyuSoungmin",
+	"CreatedByURL": "",
+	"DocsURL": "",
+	"MarketplaceURL": "",
+	"SupportURL": "",
+	"CanContainContent": true,
+	"IsBetaVersion": false,
+	"IsExperimentalVersion": false,
+	"Installed": false,
+	"Modules": [
+		{
+			"Name": "AICore",
+			"Type": "Runtime",
+			"LoadingPhase": "Default"
+		}
+	]
+}

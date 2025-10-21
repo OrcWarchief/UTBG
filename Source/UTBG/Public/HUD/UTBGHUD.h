@@ -23,6 +23,8 @@ class UTBG_API AUTBGHUD : public AHUD
 public:
     virtual void BeginPlay() override;
 
+    UFUNCTION() 
+    void HandleResolvingChanged(bool bResolving);
 protected:
     UPROPERTY(EditDefaultsOnly, Category = "UI")
     TSubclassOf<class UUserOverlay> OverlayClass;

@@ -12,6 +12,7 @@ class AUTBGPlayerState;
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnTeamAPChanged, ETeam, Team, int32, NewAP);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnTurnChanged, ETeam, NewTurnTeam);
 DECLARE_DYNAMIC_MULTICAST_DELEGATE_TwoParams(FOnMatchEnded, ETeam, WinningTeam, FString, Reason);
+DECLARE_DYNAMIC_MULTICAST_DELEGATE_OneParam(FOnResolvingChanged, bool, bResolving);
 
 UCLASS()
 class UTBG_API AUTBGGameState : public AGameState
@@ -71,6 +72,9 @@ public:
     UPROPERTY(BlueprintAssignable, Category = "Match|Events")
     FOnMatchEnded OnMatchEnded;
 
+    UPROPERTY(BlueprintAssignable, Category = "Turn|Events")
+    FOnResolvingChanged OnResolvingChanged;
+
     /** 서버만 호출: 결과 설정 + 복제 */
     UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Match")
     void ServerSetMatchResult(ETeam Winner, const FString& Reason);
@@ -102,6 +106,9 @@ public:
     // 쿨다운 중 일시 스킬 잠금
     UFUNCTION(BlueprintCallable, Category = "Turn")
     void SetResolving(bool bNew);
+
+    UFUNCTION(BlueprintCallable, BlueprintAuthorityOnly, Category = "Turn")
+    void ApplyTurnStartEffects();
 
     /**
     * 팀 캐시 유지

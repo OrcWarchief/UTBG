@@ -11,6 +11,7 @@ class USpringArmComponent;
 class UCameraComponent;
 class UInputAction;
 class ABoard;
+class UFloatingPawnMovement;
 
 UCLASS()
 class UTBG_API ACameraPawn : public APawn
@@ -25,13 +26,16 @@ public:
 	UPROPERTY(EditAnywhere, Category = "Team")
 	ETeam Team = ETeam::ET_NoTeam;
 
+	UFUNCTION(BlueprintCallable, Category = "UI|Widget Scale")
+	void UpdateWidgetScaleForAllPawns();
+
 protected:
 	UPROPERTY(VisibleAnywhere)
 	USpringArmComponent* SpringArm = nullptr;
 	UPROPERTY(VisibleAnywhere)
 	UCameraComponent* Camera = nullptr;
 	UPROPERTY(VisibleAnywhere) 
-	class UFloatingPawnMovement* Movement = nullptr;
+	UFloatingPawnMovement* Movement = nullptr;
 
 	// Enhanced Input
 	UPROPERTY(EditDefaultsOnly, Category = "Input") 
@@ -67,10 +71,31 @@ protected:
 	UPROPERTY(EditAnywhere, Category = "Camera") 
 	float MaxArm = 3000.f;
 
+	// À§Á¬ ½ºÄÉÀÏ Æ©´×°ª
+	UPROPERTY(EditAnywhere, Category = "UI|Widget Scale")
+	float MinWidgetScale = 0.05f;   // ÁÜ ÀÎ
+	UPROPERTY(EditAnywhere, Category = "UI|Widget Scale")
+	float MaxWidgetScale = 1.00f;   // ÁÜ ¾Æ¿ô
+	UPROPERTY(EditAnywhere, Category = "UI|Widget Scale")
+	float ScaleLerpSpeed = 0.f;
+
+	// LOD thresholds  Arm > LOD0Arm => LOD0, Arm > LOD1Arm => LOD1, else LOD2.
+	UPROPERTY(EditAnywhere, Category = "UI|Widget LOD") float LOD0Arm = 2400.f; // far  -> bars only
+	UPROPERTY(EditAnywhere, Category = "UI|Widget LOD") float LOD1Arm = 1400.f; // mid  -> + HP text
+	// near (< LOD1Arm)                     -> full (shield row too)
+
+	// Reduce spam updates
+	UPROPERTY(EditAnywhere, Category = "UI|Widget") float NotifyDeltaThreshold = 5.f;
+
+	float LastArmLengthNotified = -1.f;
+	int32 LastLODNotified = INDEX_NONE;
+
 	TWeakObjectPtr<ABoard> Board;
 
 	void ClampToBoard();
 
+	float ComputeTargetScale(float Arm) const;
+	int32 ComputeLOD(float Arm) const;
 public:	
 
 };
